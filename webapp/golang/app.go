@@ -91,7 +91,40 @@ func dbInitialize() {
 		db.Exec(sql)
 	}
 
-	updateUsers()
+	if err := exportImages(); err != nil {
+		log.Print(err)
+		return
+	}
+	if err := updateUsers(); err != nil {
+		log.Print(err)
+		return
+	}
+}
+
+func exportImages() error {
+	posts := []Post{}
+	if err := db.Select(&posts, "SELECT * FROM posts"); err != nil {
+		return err
+	}
+
+	for _, p := range posts {
+		ext := ""
+		if p.Mime == "image/jpeg" {
+			ext = ".jpg"
+		} else if p.Mime == "image/png" {
+			ext = ".png"
+		} else if p.Mime == "image/gif" {
+			ext = ".gif"
+		}
+
+		if _, err := os.Stat(fmt.Sprintf("../public/image/%d%s", p.ID, ext)); err != nil {
+			if err := os.WriteFile(fmt.Sprintf("../public/image/%d%s", p.ID, ext), p.Imgdata, 0644); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func tryLogin(accountName, password string) *User {
@@ -710,6 +743,19 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ext := ""
+	if mime == "image/jpeg" {
+		ext = ".jpg"
+	} else if mime == "image/png" {
+		ext = ".png"
+	} else if mime == "image/gif" {
+		ext = ".gif"
+	}
+	if err := os.WriteFile(fmt.Sprintf("../public/image/%d%s", pid, ext), filedata, 0644); err != nil {
+		log.Print(err)
+		return
+	}
+
 	http.Redirect(w, r, "/posts/"+strconv.FormatInt(pid, 10), http.StatusFound)
 }
 
@@ -914,9 +960,6 @@ func main() {
 	r.Get("/admin/banned", getAdminBanned)
 	r.Post("/admin/banned", postAdminBanned)
 	r.Get(`/@{accountName:[a-zA-Z]+}`, getAccountName)
-	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		http.FileServer(http.Dir("../public")).ServeHTTP(w, r)
-	})
 
 	updateUsers()
 
