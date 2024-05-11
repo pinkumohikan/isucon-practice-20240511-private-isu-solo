@@ -175,11 +175,30 @@ func getFlash(w http.ResponseWriter, r *http.Request, key string) string {
 func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, error) {
 	var posts []Post
 
+	// comment数をpost毎に取得
+	var postIds []int
 	for _, p := range results {
-		err := db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
-		if err != nil {
+		postIds = append(postIds, p.ID)
+	}
+	query, params, err := sqlx.In("SELECT `post_id`, COUNT(*) AS `count` FROM `comments` WHERE `post_id` IN (?) GROUP BY `post_id`", postIds)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.Queryx(db.Rebind(query), params...)
+	if err != nil {
+		return nil, err
+	}
+	postCommentCounts := map[int]int{}
+	for rows.Next() {
+		var postID, commentCount int
+		if err := rows.Scan(&postID, &commentCount); err != nil {
 			return nil, err
 		}
+		postCommentCounts[postID] = commentCount
+	}
+
+	for _, p := range results {
+		p.CommentCount = postCommentCounts[p.ID]
 
 		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
 		if !allComments {
