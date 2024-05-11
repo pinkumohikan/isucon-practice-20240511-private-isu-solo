@@ -8,7 +8,7 @@ stop-services:
 	sudo systemctl stop mysql
 
 build:
-	cd webapp/golang/ && make app
+	. ~/env.sh && cd webapp/golang/ && make app
 
 truncate-logs:
 	sudo journalctl --vacuum-size=1K
