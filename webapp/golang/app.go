@@ -178,7 +178,7 @@ func getFlash(w http.ResponseWriter, r *http.Request, key string) string {
 func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, error) {
 	var posts []Post
 
-	// comment数をpost毎に取得
+	// post毎のcomment数
 	var postIds []int
 	for _, p := range results {
 		postIds = append(postIds, p.ID)
@@ -200,24 +200,38 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 		postCommentCounts[postID] = commentCount
 	}
 
+	// post毎のコメント
+	limit := " LIMIT 9999"
+	if !allComments {
+		limit = " LIMIT 3"
+	}
+	query, params, err = sqlx.In("SELECT * FROM `comments` WHERE `post_id` IN (?) ORDER BY `created_at` DESC"+limit, postIds)
+	if err != nil {
+		return nil, err
+	}
+	rows, err = db.Queryx(db.Rebind(query), params...)
+	if err != nil {
+		return nil, err
+	}
+	var postComments = map[int][]Comment{}
+	for rows.Next() {
+		var c Comment
+		if err := rows.StructScan(&c); err != nil {
+			return nil, err
+		}
+		postComments[c.PostID] = append(postComments[c.PostID], c)
+	}
+
 	for _, p := range results {
 		p.CommentCount = postCommentCounts[p.ID]
 
-		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
-		if !allComments {
-			query += " LIMIT 3"
-		}
-		var comments []Comment
-		err = db.Select(&comments, query, p.ID)
-		if err != nil {
-			return nil, err
-		}
+		comments := postComments[p.ID]
 
+		usersMutex.RLock()
 		for i := 0; i < len(comments); i++ {
-			usersMutex.RLock()
 			comments[i].User = users[comments[i].UserID]
-			usersMutex.RUnlock()
 		}
+		usersMutex.RUnlock()
 
 		// reverse
 		for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
