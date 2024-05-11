@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bradfitz/gomemcache/memcache"
@@ -89,6 +90,8 @@ func dbInitialize() {
 	for _, sql := range sqls {
 		db.Exec(sql)
 	}
+
+	updateUsers()
 }
 
 func tryLogin(accountName, password string) *User {
@@ -211,10 +214,9 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 		}
 
 		for i := 0; i < len(comments); i++ {
-			err := db.Get(&comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
-			if err != nil {
-				return nil, err
-			}
+			usersMutex.RLock()
+			comments[i].User = users[comments[i].UserID]
+			usersMutex.RUnlock()
 		}
 
 		// reverse
@@ -224,10 +226,9 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 
 		p.Comments = comments
 
-		err = db.Get(&p.User, "SELECT * FROM `users` WHERE `id` = ?", p.UserID)
-		if err != nil {
-			return nil, err
-		}
+		usersMutex.RLock()
+		p.User = users[p.UserID]
+		usersMutex.RUnlock()
 
 		p.CSRFToken = csrfToken
 
@@ -388,6 +389,14 @@ func postRegister(w http.ResponseWriter, r *http.Request) {
 	session.Values["user_id"] = uid
 	session.Values["csrf_token"] = secureRandomStr(16)
 	session.Save(r, w)
+
+	u := User{}
+	if err := db.Get(&u, "SELECT * FROM users WHERE account_name = ?", accountName); err != nil {
+		return
+	}
+	usersMutex.Lock()
+	users[u.ID] = u
+	usersMutex.Unlock()
 
 	http.Redirect(w, r, "/", http.StatusFound)
 }
@@ -811,6 +820,26 @@ func postAdminBanned(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/banned", http.StatusFound)
 }
 
+var (
+	users      = map[int]User{}
+	usersMutex = sync.RWMutex{}
+)
+
+func updateUsers() error {
+	usersMutex.Lock()
+	defer usersMutex.Unlock()
+
+	us := []User{}
+	if err := db.Select(&us, "SELECT * FROM users"); err != nil {
+		return err
+	}
+	for _, u := range us {
+		users[u.ID] = u
+	}
+
+	return nil
+}
+
 func main() {
 	http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
 	go func() {
@@ -874,6 +903,8 @@ func main() {
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
 		http.FileServer(http.Dir("../public")).ServeHTTP(w, r)
 	})
+
+	updateUsers()
 
 	log.Fatal(http.ListenAndServe(":8080", r))
 }
